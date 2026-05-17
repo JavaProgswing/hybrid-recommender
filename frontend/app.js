@@ -68,6 +68,7 @@ const els = {
     loadMoreBtn: $('load-more-btn'),
     loadMoreContainer: $('load-more-container'),
     recsSection: $('recs-section'),
+    recsLoader: $('recs-loader'),
     recsStrip: $('recs-strip'),
     toastContainer: $('toast-container'),
     weightAlpha: $('weight-alpha'),
@@ -449,11 +450,16 @@ async function loadRecommendations(title) {
     }
 
     els.recsSection.hidden = false;
-    els.recsStrip.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px;">Loading recommendations...</div>';
+    els.recsLoader.hidden = false;
+    els.recsStrip.hidden = true;
+    els.recsStrip.innerHTML = '';
 
     try {
         const data = await API.get(`/api/recommend/${encodeURIComponent(title)}?top_n=12`);
         const recs = data.recommendations || [];
+
+        els.recsLoader.hidden = true;
+        els.recsStrip.hidden = false;
 
         if (!recs.length) {
             els.recsStrip.innerHTML = '<div style="padding:16px;color:var(--text-muted);">No recommendations found.</div>';
@@ -485,6 +491,8 @@ async function loadRecommendations(title) {
         // Scroll to recs
         els.recsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch {
+        els.recsLoader.hidden = true;
+        els.recsStrip.hidden = false;
         els.recsStrip.innerHTML = '<div style="padding:16px;color:var(--text-muted);">Could not load recommendations.</div>';
     }
 }
