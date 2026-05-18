@@ -1,96 +1,97 @@
+"""
+data_preprocessing.py - Cleans, normalizes, and encodes the dataset
+before it is passed to adapt_data() and the recommender models.
+Should be called before running either filtering method.
+"""
+
 import pandas as pd
-import numpy as np
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler
-import os
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 
-def preprocess_books_data(filepath="datasets/booksdata.csv"):
-    """
-    Preprocess the books dataset.
-    - Removes duplicate entries
-    - Handles missing values
-    - Normalizes ratings from 1-5 to 0-1 scale
-    Returns: cleaned pandas DataFrame
-    """
-    df = pd.read_csv(filepath)
-    print(f"Original shape: {df.shape}")
 
-    df = df.drop_duplicates()
-    print(f"After removing duplicates: {df.shape}")
-
-    df = df.dropna(subset=['title', 'authors'])
-    df['description'] = df['description'].fillna('No description available')
-
-    scaler = MinMaxScaler()
-    df['rating_normalized'] = scaler.fit_transform(df[['rating']])
-
-    print(f"Final shape: {df.shape}")
+def handle_missing_values(df):
+    """Fill missing values. Numeric columns get median, text gets empty string."""
+    df = df.dropna(how="all")
+    for col in df.columns:
+        if df[col].dtype in ["float64", "int64"]:
+            df[col] = df[col].fillna(df[col].median())
+        else:
+            df[col] = df[col].fillna("")
     return df
 
-def preprocess_ratings_data(filepath="datasets/ratings.csv"):
-    """
-    Preprocess the ratings dataset.
-    - Removes duplicate user-book pairs
-    - Handles missing values
-    - Normalizes ratings from 1-5 to 0-1 scale
-    Returns: cleaned pandas DataFrame
-    """
-    df = pd.read_csv(filepath)
-    print(f"Original shape: {df.shape}")
 
-    df = df.drop_duplicates(subset=['user_id', 'book_id'])
-    print(f"After removing duplicates: {df.shape}")
-
-    df = df.dropna()
-
-    scaler = MinMaxScaler()
-    df['rating_normalized'] = scaler.fit_transform(df[['rating']])
-
-    print(f"Final shape: {df.shape}")
+def remove_duplicates(df):
+    """Remove duplicate rows based on user+item columns if available."""
+    user_col = next(
+        (
+            c
+            for c in df.columns
+            if any(k in c.lower() for k in ["user_id", "user", "reviewer"])
+        ),
+        None,
+    )
+    item_col = next(
+        (
+            c
+            for c in df.columns
+            if any(
+                k in c.lower()
+                for k in ["book_id", "movie_id", "product_id", "item_id", "asin"]
+            )
+        ),
+        None,
+    )
+    if user_col and item_col:
+        df = df.drop_duplicates(subset=[user_col, item_col])
+    else:
+        df = df.drop_duplicates()
     return df
 
-def preprocess_sentiment_data(filepath="datasets/Customer_Sentiment.csv"):
-    """
-    Preprocess the customer sentiment dataset.
-    - Removes duplicates
-    - Handles missing values
-    - Encodes categorical columns (gender, region, sentiment etc)
-    - Normalizes customer_rating to 0-1 scale
-    Returns: cleaned pandas DataFrame
-    """
-    df = pd.read_csv(filepath)
-    print(f"Original shape: {df.shape}")
 
-    df = df.drop_duplicates()
-    print(f"After removing duplicates: {df.shape}")
+def normalize_ratings(df):
+    """Normalize any rating column from its original scale to 0-1."""
+    rating_col = next(
+        (
+            c
+            for c in df.columns
+            if any(k in c.lower() for k in ["rating", "score", "stars"])
+        ),
+        None,
+    )
+    if rating_col:
+        df[rating_col] = pd.to_numeric(df[rating_col], errors="coerce")
+        df = df.dropna(subset=[rating_col])
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        df["rating_normalized"] = scaler.fit_transform(df[[rating_col]])
+    return df
 
-    df = df.dropna()
 
-    categorical_cols = ['gender', 'age_group', 'region', 
-                       'product_category', 'purchase_channel', 
-                       'platform', 'sentiment']
+def encode_categorical(df):
+    """Label encode short categorical columns. Skips long text like descriptions."""
     le = LabelEncoder()
-    for col in categorical_cols:
-        if col in df.columns:
-            df[col] = le.fit_transform(df[col].astype(str))
-
-    scaler = MinMaxScaler()
-    df['rating_normalized'] = scaler.fit_transform(
-        df[['customer_rating']])
-
-    print(f"Final shape: {df.shape}")
+    skip_keywords = [
+        "description",
+        "review",
+        "summary",
+        "text",
+        "comment",
+        "overview",
+        "combined",
+    ]
+    for col in df.select_dtypes(include=["object", "str"]).columns:
+        is_text = any(kw in col.lower() for kw in skip_keywords)
+        avg_len = df[col].astype(str).str.len().mean()
+        if not is_text and avg_len < 100:
+            df[f"{col}_encoded"] = le.fit_transform(df[col].astype(str))
     return df
 
-if __name__ == "__main__":
-    print("=== Preprocessing Books Data ===")
-    books_df = preprocess_books_data()
-    
-    print("\n=== Preprocessing Ratings Data ===")
-    ratings_df = preprocess_ratings_data()
-    
-    print("\n=== Preprocessing Sentiment Data ===")
-    sentiment_df = preprocess_sentiment_data()
-    
-    print("\n✅ All datasets preprocessed successfully!")
-    print(f"Books: {books_df.shape}")
-    print(f"Ratings: {ratings_df.shape}")
-    print(f"Sentiment: {sentiment_df.shape}")
+
+def preprocess(df):
+    """
+    Full preprocessing pipeline. Returns a clean DataFrame
+    ready for adapt_data() and model input.
+    """
+    df = handle_missing_values(df)
+    df = remove_duplicates(df)
+    df = normalize_ratings(df)
+    df = encode_categorical(df)
+    return df
