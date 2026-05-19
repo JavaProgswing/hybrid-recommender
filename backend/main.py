@@ -403,6 +403,77 @@ def get_recommendations(item_title: str, top_n: int = 10, explain: bool = Query(
     }
 
 
+@app.get("/api/explain")
+def explain_recommendation(item: str, user: str):
+    """Explain WHY an item was recommended to a specific user."""
+    if not models["ready"]:
+        raise HTTPException(400, "Models not built. Build first via /api/build.")
+        
+    hybrid = models["hybrid"]
+    
+    # Check if item exists in our models
+    if item not in hybrid._rating_map:
+        raise HTTPException(404, "Item not found in recommendations database.")
+        
+    # Extract item scores
+    sentiment_score = hybrid._sentiment_map.get(item, 0.0)
+    bayesian_score = hybrid._rating_map.get(item, 0.0)
+    norm_sentiment = (sentiment_score + 1) / 2
+    
+    collab_score = 0.0
+    content_score = 0.0
+    
+    collab_model = models.get("collab")
+    if collab_model:
+        # Predict rating for the user and item
+        pred = collab_model.predict_rating(user, item)
+        if pred is not None:
+            collab_score = max(0.0, min(1.0, pred / 5.0))
+            
+        # For content score, compare against the user's top-rated item
+        user_history = collab_model.df[collab_model.df['user_id'] == user]
+        if not user_history.empty:
+            top_item = user_history.loc[user_history['rating'].idxmax()]['title']
+            content_model = models.get("content")
+            if content_model:
+                try:
+                    recs = content_model.recommend(top_item, top_n=100)
+                    for r in recs:
+                        if r['title'] == item:
+                            content_score = r['content_score']
+                            break
+                except Exception:
+                    pass
+    
+    # Build reasons
+    reasons = []
+    if collab_score > 0.7:
+        reasons.append("Similar to your top rated items")
+    elif collab_score > 0.5:
+        reasons.append("Matches your user profile")
+        
+    if norm_sentiment > 0.65:
+        reasons.append("High sentiment score")
+        
+    if bayesian_score > 4.0:
+        reasons.append("Popular in your category")
+        
+    reasons = reasons[:3]
+    if not reasons:
+        reasons.append("Recommended based on general popularity")
+
+    return {
+        "item": item,
+        "reasons": reasons,
+        "scores": {
+            "content": round(content_score, 4),
+            "collab": round(collab_score, 4),
+            "sentiment": round(norm_sentiment, 4),
+            "bayesian": round(bayesian_score, 4)
+        }
+    }
+
+
 # ── Weights ─────────────────────────────────────────────────────────
 
 @app.get("/api/weights")
