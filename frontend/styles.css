@@ -955,6 +955,18 @@ body {
     margin-top: 40px;
 }
 
+.footer__link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: color var(--transition), border-color var(--transition);
+}
+
+.footer__link:hover {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+}
+
 /* ── Responsive ──────────────────────────────────────────────────── */
 @media (max-width: 1200px) {
     .product-grid, .skeleton-grid, .trending-grid { grid-template-columns: repeat(3, 1fr); }

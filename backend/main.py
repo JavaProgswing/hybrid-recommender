@@ -6,7 +6,9 @@ import os
 import sys
 import io
 import time
-from datetime import datetime, timedelta
+import logging
+from collections import Counter
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -91,6 +93,7 @@ models = {
     "ready": False,
     "item_df": None,
     "build_time": None,
+    "last_trained_at": None,
 }
 
 trending_cache = {}
@@ -133,6 +136,108 @@ def status():
         "product_count": product_count,
         "model_ready": models["ready"],
         "build_time": models["build_time"],
+    }
+
+
+# ── Dashboard (admin metrics — issue #71) ───────────────────────────
+
+@app.get("/api/dashboard")
+def dashboard():
+    """Aggregate metrics for the admin dashboard."""
+    sb = get_supabase()
+
+    try:
+        product_count = sb.table('products').select('id', count='exact').limit(0).execute().count or 0
+    except Exception as e:
+        logger.warning("Dashboard: product count failed: %s", e)
+        product_count = 0
+
+    try:
+        interaction_count = sb.table('purchases').select('id', count='exact').limit(0).execute().count or 0
+    except Exception as e:
+        logger.warning("Dashboard: interaction count failed: %s", e)
+        interaction_count = 0
+
+    # Distinct users from purchases (capped scan)
+    total_users = 0
+    purchase_counts: Counter = Counter()
+    try:
+        purchase_rows = sb.table('purchases') \
+            .select('user_id, product_id') \
+            .limit(50000).execute().data or []
+        total_users = len({r['user_id'] for r in purchase_rows if r.get('user_id')})
+        purchase_counts = Counter(
+            r['product_id'] for r in purchase_rows if r.get('product_id') is not None
+        )
+    except Exception as e:
+        logger.warning("Dashboard: purchases scan failed: %s", e)
+
+    # Averages over products
+    avg_recommendation_score = 0.0
+    avg_sentiment_score = 0.0
+    try:
+        prod_stats = sb.table('products') \
+            .select('rating, avg_sentiment') \
+            .limit(50000).execute().data or []
+        ratings = [
+            float(p['rating']) for p in prod_stats
+            if p.get('rating') not in (None, 0)
+        ]
+        sentiments = [
+            float(p['avg_sentiment']) for p in prod_stats
+            if p.get('avg_sentiment') is not None
+        ]
+        if ratings:
+            avg_recommendation_score = round(sum(ratings) / len(ratings), 4)
+        if sentiments:
+            avg_sentiment_score = round(sum(sentiments) / len(sentiments), 4)
+    except Exception as e:
+        logger.warning("Dashboard: averages query failed: %s", e)
+
+    # Top 5 by purchase count; fallback to top-rated when no purchases
+    top_products = []
+    try:
+        if purchase_counts:
+            top_ids = [pid for pid, _ in purchase_counts.most_common(5)]
+            prod_result = sb.table('products') \
+                .select('id, title, category, rating') \
+                .in_('id', top_ids).execute().data or []
+            prod_map = {p['id']: p for p in prod_result}
+            for pid in top_ids:
+                p = prod_map.get(pid)
+                if p:
+                    top_products.append({
+                        'id': p['id'],
+                        'title': p.get('title', ''),
+                        'category': p.get('category', ''),
+                        'rating': round(float(p.get('rating', 0) or 0), 2),
+                        'interactions': purchase_counts[pid],
+                    })
+        if not top_products:
+            fallback = sb.table('products') \
+                .select('id, title, category, rating') \
+                .order('rating', desc=True) \
+                .order('review_count', desc=True) \
+                .limit(5).execute().data or []
+            for p in fallback:
+                top_products.append({
+                    'id': p['id'],
+                    'title': p.get('title', ''),
+                    'category': p.get('category', ''),
+                    'rating': round(float(p.get('rating', 0) or 0), 2),
+                    'interactions': 0,
+                })
+    except Exception as e:
+        logger.warning("Dashboard: top products query failed: %s", e)
+
+    return {
+        "total_products": product_count,
+        "total_users": total_users,
+        "total_interactions": interaction_count,
+        "avg_recommendation_score": avg_recommendation_score,
+        "avg_sentiment_score": avg_sentiment_score,
+        "top_5_recommended_products": top_products,
+        "model_last_trained": models.get("last_trained_at"),
     }
 
 
@@ -373,6 +478,7 @@ def build_models():
     models["item_df"] = item_df
     models["ready"] = True
     models["build_time"] = build_time
+    models["last_trained_at"] = datetime.now(timezone.utc).isoformat()
 
     logger.info(
         "Built recommendation models for %d items in %.2f seconds",
@@ -694,3 +800,7 @@ if os.path.isdir(frontend_dir):
     @app.get("/")
     def serve_frontend():
         return FileResponse(os.path.join(frontend_dir, "index.html"))
+
+    @app.get("/dashboard.html")
+    def serve_dashboard():
+        return FileResponse(os.path.join(frontend_dir, "dashboard.html"))
