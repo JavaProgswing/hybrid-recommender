@@ -927,13 +927,92 @@ body {
 }
 
 /* ── Footer ──────────────────────────────────────────────────────── */
+/* Sticky Footer Layout */
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+.page-wrapper {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+main {
+  flex: 1;
+}
+
+/* Footer Styling */
 .footer {
+  background-color: #111827;
+  color: white;
+  padding: 20px 24px;
+  border-top: 1px solid #374151;
+  margin-top: auto;
+  font-size: 14px;
+}
+
+.footer-container {
+  max-width: 1200px;
+  margin: 0 auto;
+
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+
+  flex-wrap: wrap;
+}
+
+.footer-left h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.footer-left p {
+  margin-top: 4px;
+  color: #9ca3af;
+  font-size: 14px;
+}
+
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.footer-right a {
+  color: #60a5fa;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.footer-right a:hover {
+  text-decoration: underline;
+}
+
+.gssoc-badge {
+  height: 40px;
+  width: auto;
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+  .footer-container {
+    flex-direction: column;
     text-align: center;
-    padding: 32px 24px;
-    color: var(--text-muted);
-    font-size: 12px;
-    border-top: 1px solid var(--border);
-    margin-top: 40px;
+  }
+
+  .footer-right {
+    flex-direction: column;
+  }
 }
 
 /* ── Responsive ──────────────────────────────────────────────────── */
