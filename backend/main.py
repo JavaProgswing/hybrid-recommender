@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from typing import Optional
 from dotenv import load_dotenv
@@ -41,6 +41,13 @@ app = FastAPI(title="Hybrid Recommender API", version="3.0")
 
 RESPONSE_TIME_HEADER = "X-Response-Time-ms"
 DEFAULT_SLOW_RESPONSE_THRESHOLD_MS = 1000.0
+RATE_LIMIT_WINDOW_SECONDS = 60
+RATE_LIMIT_HEADERS = {
+    "limit": "X-RateLimit-Limit",
+    "remaining": "X-RateLimit-Remaining",
+    "reset": "X-RateLimit-Reset",
+}
+_rate_limit_buckets = {}
 
 
 def _get_slow_response_threshold_ms() -> float:
@@ -48,6 +55,57 @@ def _get_slow_response_threshold_ms() -> float:
         return float(os.environ.get("RESPONSE_TIME_SLOW_MS", DEFAULT_SLOW_RESPONSE_THRESHOLD_MS))
     except ValueError:
         return DEFAULT_SLOW_RESPONSE_THRESHOLD_MS
+
+
+def _get_rate_limit_for_path(path: str) -> int | None:
+    if path.startswith("/api/recommend/"):
+        return int(os.environ.get("RATE_LIMIT_RECOMMEND_PER_MIN", "10"))
+    if path == "/api/search":
+        return int(os.environ.get("RATE_LIMIT_SEARCH_PER_MIN", "30"))
+    return None
+
+
+def _client_rate_key(request: Request) -> str:
+    client_host = request.client.host if request.client else "unknown"
+    return f"{client_host}:{request.url.path}"
+
+
+def _rate_limit_headers(limit: int, remaining: int, reset_at: int) -> dict[str, str]:
+    return {
+        RATE_LIMIT_HEADERS["limit"]: str(limit),
+        RATE_LIMIT_HEADERS["remaining"]: str(max(0, remaining)),
+        RATE_LIMIT_HEADERS["reset"]: str(reset_at),
+    }
+
+
+def _check_rate_limit(request: Request):
+    limit = _get_rate_limit_for_path(request.url.path)
+    if limit is None:
+        return None, None
+
+    now = time.time()
+    key = _client_rate_key(request)
+    window_start, count = _rate_limit_buckets.get(key, (now, 0))
+    if now - window_start >= RATE_LIMIT_WINDOW_SECONDS:
+        window_start, count = now, 0
+
+    count += 1
+    reset_at = int(window_start + RATE_LIMIT_WINDOW_SECONDS)
+    remaining = limit - count
+    _rate_limit_buckets[key] = (window_start, count)
+
+    headers = _rate_limit_headers(limit, remaining, reset_at)
+    if count > limit:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "Rate limit exceeded",
+                "message": "Too many requests. Please try again later.",
+            },
+            headers=headers,
+        ), headers
+
+    return None, headers
 
 # CORS — restrict in production; allow localhost for development
 allowed_origins = os.environ.get("CORS_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
@@ -66,7 +124,14 @@ async def response_time_middleware(request: Request, call_next):
     response = None
 
     try:
+        rate_limit_response, rate_headers = _check_rate_limit(request)
+        if rate_limit_response is not None:
+            response = rate_limit_response
+            return response
+
         response = await call_next(request)
+        if rate_headers is not None:
+            response.headers.update(rate_headers)
         return response
     finally:
         duration_ms = (time.perf_counter() - started_at) * 1000
