@@ -1355,3 +1355,81 @@ main {
     flex-direction: column;
   }
 }
+
+/* Skeleton Loading */
+
+.skeleton-card {
+    overflow: hidden;
+    position: relative;
+}
+
+.skeleton {
+    position: relative;
+    overflow: hidden;
+    background: #e5e7eb;
+    border-radius: 8px;
+}
+
+.skeleton::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: -150px;
+    width: 150px;
+    height: 100%;
+    background: linear-gradient(
+        90deg,
+        transparent,
+        rgba(255, 255, 255, 0.6),
+        transparent
+    );
+    animation: shimmer 1.2s infinite;
+}
+
+@keyframes shimmer {
+    100% {
+        transform: translateX(300px);
+    }
+}
+
+.skeleton-image {
+    width: 100%;
+    height: 220px;
+}
+
+.skeleton-title {
+    height: 20px;
+    width: 80%;
+    margin: 16px 0 12px;
+}
+
+.skeleton-text {
+    height: 14px;
+    width: 100%;
+    margin-bottom: 10px;
+}
+
+.skeleton-text.short {
+    width: 60%;
+}
+
+.skeleton-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 18px;
+}
+
+.skeleton-price {
+    width: 70px;
+    height: 18px;
+}
+
+.skeleton-button {
+    width: 90px;
+    height: 36px;
+}
+
+.product-card {
+    transition: opacity 0.3s ease;
+}

@@ -99,6 +99,32 @@ function toast(message, type = 'info') {
     }, 3500);
 }
 
+function createSkeletonCard() {
+    return `
+        <div class="product-card skeleton-card">
+            <div class="skeleton skeleton-image"></div>
+
+            <div class="product-info">
+                <div class="skeleton skeleton-title"></div>
+                <div class="skeleton skeleton-text"></div>
+                <div class="skeleton skeleton-text short"></div>
+
+                <div class="skeleton-footer">
+                    <div class="skeleton skeleton-price"></div>
+                    <div class="skeleton skeleton-button"></div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function showSkeletons(container, count = 8) {
+    container.innerHTML = Array(count)
+        .fill("")
+        .map(() => createSkeletonCard())
+        .join("");
+}
+
 function renderStars(rating) {
     const full = Math.floor(rating);
     const half = rating - full >= 0.5;
@@ -364,12 +390,14 @@ async function loadProducts(append = false) {
     state.isLoading = true;
 
     if (!append) {
-        els.productGrid.innerHTML = '';
-        els.skeletonLoader.hidden = false;
-        els.infiniteEnd.hidden = true;
-        state.page = 1;
-        state.hasMore = true;
-        state.products = [];
+    showSkeletons(els.productGrid, 8);
+
+    els.skeletonLoader.hidden = true;
+    els.infiniteEnd.hidden = true;
+
+    state.page = 1;
+    state.hasMore = true;
+    state.products = [];
     } else {
         els.infiniteLoader.hidden = false;
     }
