@@ -1587,3 +1587,14 @@ main {
     cursor: pointer;
     font-size: 12px;
 }
+/* Star rating for product cards (issue #43) */
+.card-rating {
+    margin-top: 8px;
+    font-size: 1rem;
+    color: #ffb400;   /* gold stars */
+}
+.card-rating .review-count {
+    color: #6c757d;   /* grey text */
+    font-size: 0.85rem;
+    margin-left: 5px;
+}
