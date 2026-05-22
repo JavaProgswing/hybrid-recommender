@@ -1,3 +1,19 @@
+// ===== THEME TOGGLE =====
+const themeToggle = document.getElementById('theme-toggle');
+const root = document.documentElement;
+
+// Load saved preference or default to dark
+const savedTheme = localStorage.getItem('theme') || 'dark';
+root.setAttribute('data-theme', savedTheme);
+themeToggle.textContent = savedTheme === 'dark' ? '🌙' : '☀️';
+
+themeToggle.addEventListener('click', () => {
+  const current = root.getAttribute('data-theme');
+  const next = current === 'dark' ? 'light' : 'dark';
+  root.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+  themeToggle.textContent = next === 'dark' ? '🌙' : '☀️';
+});
 /**
  * HybridRec — Frontend Application v3
  * Supabase Auth + PostgreSQL FTS Search + Modern UI
@@ -22,25 +38,32 @@ async function initSupabase() {
     return sbClient;
 }
 
+
 // ── State ───────────────────────────────────────────────────────────
 const state = {
     user: null,
     isGuest: true,
-    products: [],    trending: [],    page: 1,
+    products: [],
+    allProducts: [],
+    trending: [],
+    page: 1,
     perPage: 20,
     totalProducts: 0,
     isLoading: false,
     hasMore: true,
     searchTimer: null,
-    searchResults: [],
     autocompleteResults: [],
     selectedSearchIdx: -1,
     isAuthSignUp: false,
     modelReady: false,
-    recommendationSocket: null,
-    realtimeReady: false,
-    realtimeFallbackTimer: null,
-    pendingRecommendationTitle: null,
+    scrollObserver: null,
+    compareList: [],
+    heatmapSelected: [],
+    filters: {
+        category: '',
+        rating: '',
+        sentiment: '',
+    },
 };
 
 // ── DOM Elements ────────────────────────────────────────────────────
@@ -114,6 +137,18 @@ function loadPreferences() {
     }
 }
 // ── Utilities ───────────────────────────────────────────────────────
+function setPageMeta(title, description) {
+    if (title) {
+        document.title = `${title} — HybridRec`;
+    } else {
+        document.title = 'HybridRec — Smart Recommendations';
+    }
+    const metaDesc = document.querySelector('meta[name="description"]');
+    if (metaDesc && description) {
+        metaDesc.setAttribute('content', description);
+    }
+}
+
 function toast(message, type = 'info') {
     const el = document.createElement('div');
     el.className = `toast ${type}`;
@@ -379,25 +414,7 @@ function initTypeToSearch() {
     });
 }
 
-// ── Search ──────────────────────────────────────────────────────────
-async function handleSearch(query) {
-    if (!query || query.length < 1) {
-        closeSearchDropdown();
-        return;
-    }
-
-    clearTimeout(state.searchTimer);
-    state.searchTimer = setTimeout(async () => {
-        try {
-            const data = await API.get(`/api/search?q=${encodeURIComponent(query)}&limit=8`);
-            state.searchResults = data.items || [];
-            state.selectedSearchIdx = -1;
-            renderSearchDropdown(state.searchResults, query);
-        } catch {
-            closeSearchDropdown();
-        }
-    }, 200);
-}
+// ── Search Dropdown ──────────────────────────────────────────────────
 
 function renderSearchDropdown(results, query) {
     if (!results.length) {
@@ -469,6 +486,23 @@ window.addEventListener('click', (e) => {
 function handleSearchKeydown(e) {
     const results = state.autocompleteResults;
 
+    if (e.key === 'Enter') {
+        e.preventDefault();
+
+        if (state.selectedSearchIdx >= 0 && results.length && els.searchDropdown.classList.contains('active')) {
+            const selected = results[state.selectedSearchIdx];
+            selectSearchResult(selected);
+        } else if (els.searchInput.value.trim().length > 0) {
+            selectSearchResult(els.searchInput.value.trim());
+        }
+        return;
+    }
+
+    if (e.key === 'Escape') {
+        closeSearchDropdown();
+        return;
+    }
+
     if (!results.length || !els.searchDropdown.classList.contains('active')) {
         return;
     }
@@ -494,24 +528,11 @@ function handleSearchKeydown(e) {
 
         renderSearchDropdown(results, els.searchInput.value);
     }
-
-    else if (e.key === 'Enter') {
-        e.preventDefault();
-
-        if (state.selectedSearchIdx >= 0) {
-            const selected = results[state.selectedSearchIdx];
-            selectSearchResult(selected);
-        }
-    }
-
-    else if (e.key === 'Escape') {
-        closeSearchDropdown();
-    }
 }
 
 
 
-function handleSearch(query) {
+function handleAutocomplete(query) {
     if (!query || query.trim().length < 1) {
         closeSearchDropdown();
         return;
@@ -574,7 +595,10 @@ async function loadProducts(append = false) {
         state.hasMore = data.has_more ?? products.length >= state.perPage;
 
         if (!append) {
+            state.allProducts = [...products];
             els.skeletonLoader.hidden = true;
+        } else {
+            state.allProducts = [...(state.allProducts || []), ...products];
         }
 
         renderProducts(products, append);
@@ -673,11 +697,12 @@ async function loadSearchResults(query) {
 
     try {
         const data = await API.get(`/api/search?q=${encodeURIComponent(query)}&limit=40`);
-        const products = data.items || [];
+        const products = data.results || data.items || [];
         els.skeletonLoader.hidden = true;
         els.productCount.textContent = `${products.length} results`;
         state.products = [];
         state.hasMore = false;
+        state.allProducts = [...products];
         renderProducts(products, false);
     } catch {
         els.skeletonLoader.hidden = true;
@@ -722,18 +747,65 @@ function renderProducts(products, append) {
 }
     if (!append) state.products = [];
     if (!products.length) {
-    els.productGrid.innerHTML = `
-        <div class="no-results">
-            <div class="no-results__icon">🔍</div>
-            <div>No matching results found</div>
-        </div>
-    `;
-    return;
-}
+        els.productGrid.innerHTML = `
+            <div class="no-results animate-fade-in">
+                <svg class="no-results-svg" width="180" height="180" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="blue-grad" x1="0" y1="0" x2="200" y2="200" gradientUnits="userSpaceOnUse">
+                            <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.8"/>
+                            <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.1"/>
+                        </linearGradient>
+                        <linearGradient id="amber-grad" x1="0" y1="0" x2="200" y2="200" gradientUnits="userSpaceOnUse">
+                            <stop offset="0%" stop-color="var(--accent)"/>
+                            <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.3"/>
+                        </linearGradient>
+                    </defs>
+                    <circle cx="100" cy="100" r="70" fill="url(#blue-grad)" filter="blur(8px)" opacity="0.15" />
+                    <circle cx="120" cy="80" r="40" fill="url(#amber-grad)" filter="blur(6px)" opacity="0.1" />
+                    
+                    <path d="M50 80 L65 140 H135 L150 80" stroke="var(--text-muted)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+                    <path d="M40 80 H160" stroke="var(--text-muted)" stroke-width="4" stroke-linecap="round" />
+                    
+                    <circle cx="130" cy="65" r="28" stroke="var(--primary)" stroke-width="2" stroke-dasharray="5 5" opacity="0.6"/>
+                    
+                    <g class="search-glass">
+                        <circle cx="130" cy="65" r="16" stroke="var(--accent)" stroke-width="3.5" fill="var(--bg-card)"/>
+                        <path d="M142 77 L158 93" stroke="var(--accent)" stroke-width="3.5" stroke-linecap="round"/>
+                    </g>
+
+                    <path d="M129 60 C129 57.5, 131 56, 133 57.5 C135 59, 132 62, 132 64 M132 67 H132.01" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+
+                    <circle cx="65" cy="105" r="2.5" fill="var(--accent)" opacity="0.6"/>
+                    <circle cx="85" cy="105" r="3.5" fill="var(--primary)" opacity="0.5"/>
+                    <circle cx="145" cy="125" r="2" fill="var(--text-muted)" opacity="0.4"/>
+                </svg>
+                <h3 class="no-results__title">No products found</h3>
+                <p class="no-results__subtitle">Try adjusting your search keywords or clearing active filters to find what you're looking for.</p>
+                <button class="btn btn--primary btn--clear-search" id="empty-state-clear-btn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:8px; display:inline-block; vertical-align:middle;">
+                        <path d="M21 12a9 9 0 11-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
+                        <polyline points="21 3 21 8 16 8"/>
+                    </svg>
+                    Clear Search & Filters
+                </button>
+            </div>
+        `;
+        
+        const clearBtn = document.getElementById('empty-state-clear-btn');
+        if (clearBtn) {
+            clearBtn.addEventListener('click', resetAllFiltersAndSearch);
+        }
+        return;
+    }
 
     const fragment = document.createDocumentFragment();
-
-    products.forEach((p, i) => {
+    const filteredProducts =
+    state.selectedCategory === 'All Categories'
+        ? products
+        : products.filter(
+            p => p.category === state.selectedCategory
+        );
+    filteredProducts.forEach((p, i) => {
         state.products.push(p);
         const card = document.createElement('div');
         card.className = p.image ? 'product-card' : 'product-card product-card--skeleton';
@@ -765,6 +837,10 @@ function renderProducts(products, append) {
             <div class="product-card__actions">
                 <label class="compare-label">
                     <input type="checkbox" class="compare-checkbox" data-title="${p.title}" ${isChecked ? 'checked' : ''}>
+                    Heatmap
+                </label>
+                <label class="compare-label">
+                    <input type="checkbox" class="side-compare-checkbox" data-title="${p.title}">
                     Compare
                 </label>
                 <button class="btn--add-cart" data-title="${p.title}">
@@ -810,6 +886,16 @@ function renderProducts(products, append) {
                     state.heatmapSelected = state.heatmapSelected.filter(t => t !== title);
                 }
                 updateCompareCount();
+            });
+        }
+
+        // Side-by-side compare checkbox
+        const sideCheckbox = card.querySelector('.side-compare-checkbox');
+        if (sideCheckbox) {
+            sideCheckbox.addEventListener('change', (e) => {
+                e.stopPropagation();
+                const success = toggleCompare(p, sideCheckbox.checked);
+                if (!success) sideCheckbox.checked = false;
             });
         }
 
@@ -898,9 +984,14 @@ function renderRecommendations(data) {
     els.recsStrip.hidden = false;
 
     if (!recs.length) {
-        els.recsStrip.innerHTML = '<div style="padding:16px;color:var(--text-muted);">No recommendations found.</div>';
-        return;
-    }
+    els.recsStrip.innerHTML = `
+        <div class="empty-recommendations">
+            <span class="empty-icon" aria-hidden="true">🔍</span>
+            <p>No recommendations found. Try a different product!</p>
+        </div>
+    `;
+    return;
+}
 
     els.recsStrip.innerHTML = recs.map((r) => `
         <div class="rec-card" data-title="${r.title}">
@@ -951,9 +1042,14 @@ async function loadRecommendations(title) {
         els.recsStrip.hidden = false;
 
         if (!recs.length) {
-            els.recsStrip.innerHTML = '<div style="padding:16px;color:var(--text-muted);">No recommendations found.</div>';
-            return;
-        }
+    els.recsStrip.innerHTML = `
+        <div class="empty-recommendations">
+            <span class="empty-icon" aria-hidden="true">🔍</span>
+            <p>No recommendations found. Try a different product!</p>
+        </div>
+    `;
+    return;
+}
     } catch {
         try {
             await loadRecommendationsOverHttp(title);
@@ -1076,11 +1172,20 @@ function populateCategoryFilter(products) {
 // ── Event Listeners ─────────────────────────────────────────────────
 function bindEvents() {
     // Search
-    els.searchInput.addEventListener('input', (e) => handleSearch(e.target.value));
+    els.searchInput.addEventListener('input', (e) => handleAutocomplete(e.target.value));
     els.searchInput.addEventListener('keydown', handleSearchKeydown);
     els.searchInput.addEventListener('focus', () => {
-        if (els.searchInput.value) handleSearch(els.searchInput.value);
+        if (els.searchInput.value) handleAutocomplete(els.searchInput.value);
     });
+    els.categoryFilter.addEventListener('change', (e) => {
+    state.selectedCategory = e.target.value;
+
+    if (els.searchInput.value.trim()) {
+        loadSearchResults(els.searchInput.value);
+    } else {
+        loadProducts();
+    }
+});
 
     // Close dropdown on outside click
     document.addEventListener('click', (e) => {
@@ -1283,12 +1388,13 @@ function initBackToTop() {
 setPageMeta(null, 'A hybrid recommender fusing TF-IDF, SVD and VADER sentiment.');
 async function init() {
     bindEvents();
+    loadPreferences();
     initTypeToSearch();
     initBackToTop();
 
     // Initialize Supabase client from backend config (no hardcoded keys)
     await initSupabase();
-
+    loadCategories();
     // Run auth and status independently — neither blocks the other
     initAuth().catch((e) => console.warn('Auth error:', e));
     checkStatus().catch((e) => console.warn('Status error:', e));
@@ -1307,13 +1413,55 @@ function debounce(func, delay) {
   };
 }
 
+function savePreferences() {
+    const prefs = {
+        category: state.filters.category,
+        rating: state.filters.rating,
+        sentiment: state.filters.sentiment
+    };
+    localStorage.setItem('userPreferences', JSON.stringify(prefs));
+}
+
+const debouncedSavePreferences = debounce(savePreferences, 500);
+
 els.categoryFilter.addEventListener('change', (e) => {
     state.filters.category = e.target.value;
-
     renderProducts(state.allProducts, false);
-
     debouncedSavePreferences();
 });
+
+els.ratingFilter.addEventListener('change', (e) => {
+    state.filters.rating = e.target.value;
+    renderProducts(state.allProducts, false);
+    debouncedSavePreferences();
+});
+
+els.sentimentFilter.addEventListener('change', (e) => {
+    state.filters.sentiment = e.target.value;
+    renderProducts(state.allProducts, false);
+    debouncedSavePreferences();
+});
+
+els.clearFiltersBtn.addEventListener('click', resetAllFiltersAndSearch);
+
+function resetAllFiltersAndSearch() {
+    els.searchInput.value = '';
+    els.categoryFilter.value = '';
+    els.ratingFilter.value = '';
+    els.sentimentFilter.value = '';
+    
+    state.filters = {
+        category: '',
+        rating: '',
+        sentiment: ''
+    };
+    
+    els.productsTitle.textContent = 'Top Products';
+    
+    debouncedSavePreferences();
+    loadProducts(false);
+    setupScrollObserver();
+}
 
 document.addEventListener('DOMContentLoaded', init);
 async function sendFeedback(item, feedback, button) {
@@ -1328,13 +1476,131 @@ async function sendFeedback(item, feedback, button) {
     }, delay);
   };
 }
+// ── Product Comparison (Side by Side) ──────────────────────────────
+function toggleCompare(product, checked) {
+    if (checked) {
+        if (state.compareList.length >= 3) {
+            toast('Maximum 3 products can be compared', 'error');
+            return false;
+        }
+        if (!state.compareList.find(p => p.title === product.title)) {
+            state.compareList.push(product);
+        }
+    } else {
+        state.compareList = state.compareList.filter(p => p.title !== product.title);
+    }
+    updateCompareBar();
+    return true;
+}
 
-els.categoryFilter.addEventListener('change', (e) => {
-    state.filters.category = e.target.value;
+function updateCompareBar() {
+    let bar = document.getElementById('compare-bar');
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'compare-bar';
+        bar.className = 'compare-bar';
+        document.body.appendChild(bar);
+    }
+    if (state.compareList.length === 0) {
+        bar.hidden = true;
+        return;
+    }
+    bar.hidden = false;
+    bar.innerHTML = `
+        <div class="compare-bar__items">
+            ${state.compareList.map(p => `
+                <div class="compare-bar__item">
+                    <span>${p.title.substring(0, 25)}${p.title.length > 25 ? '...' : ''}</span>
+                    <button onclick="removeFromCompare('${p.title.replace(/'/g, "\\'")}')">✕</button>
+                </div>
+            `).join('')}
+        </div>
+        <div class="compare-bar__actions">
+            <span class="compare-bar__count">${state.compareList.length}/3 selected</span>
+            <button class="compare-bar__btn" onclick="openComparePage()"
+                ${state.compareList.length < 2 ? 'disabled' : ''}>
+                Compare Now
+            </button>
+            <button class="compare-bar__clear" onclick="clearCompare()">Clear</button>
+        </div>
+    `;
+}
 
-    renderProducts(state.allProducts, false);
+function removeFromCompare(title) {
+    state.compareList = state.compareList.filter(p => p.title !== title);
+    document.querySelectorAll('.side-compare-checkbox').forEach(cb => {
+        if (cb.dataset.title === title) cb.checked = false;
+    });
+    updateCompareBar();
+}
 
-    debouncedSavePreferences();
-});
+function clearCompare() {
+    state.compareList = [];
+    document.querySelectorAll('.side-compare-checkbox').forEach(cb => {
+        cb.checked = false;
+    });
+    updateCompareBar();
+}
 
-document.addEventListener('DOMContentLoaded', init);
+function openComparePage() {
+    if (state.compareList.length < 2) {
+        toast('Select at least 2 products to compare', 'info');
+        return;
+    }
+
+    let modal = document.getElementById('compare-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'compare-modal';
+        modal.className = 'modal-overlay';
+        document.body.appendChild(modal);
+    }
+
+    const products = state.compareList;
+
+    modal.innerHTML = `
+        <div class="modal" style="max-width:900px;width:95%;">
+            <button class="modal__close" onclick="document.getElementById('compare-modal').hidden=true">&times;</button>
+            <h2 class="modal__title">Product Comparison</h2>
+            <div style="overflow-x:auto;margin-top:16px;">
+                <table class="compare-table">
+                    <thead>
+                        <tr>
+                            <th style="min-width:120px;">Attribute</th>
+                            ${products.map(p => `
+                                <th style="min-width:180px;">${p.title}</th>
+                            `).join('')}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Category</strong></td>
+                            ${products.map(p => `<td>${p.category || 'N/A'}</td>`).join('')}
+                        </tr>
+                        <tr>
+                            <td><strong>Rating</strong></td>
+                            ${products.map(p => `<td>⭐ ${(p.rating || 0).toFixed(1)}</td>`).join('')}
+                        </tr>
+                        <tr>
+                            <td><strong>Sentiment</strong></td>
+                            ${products.map(p => {
+                                const s = p.avg_sentiment || 0;
+                                const label = s > 0.05 ? '😊 Positive' : s < -0.05 ? '😞 Negative' : '😐 Neutral';
+                                return `<td>${label}</td>`;
+                            }).join('')}
+                        </tr>
+                        <tr>
+                            <td><strong>Description</strong></td>
+                            ${products.map(p => `<td style="font-size:12px;">${(p.description || 'N/A').substring(0, 100)}...</td>`).join('')}
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    `;
+
+    modal.hidden = false;
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.hidden = true;
+    });
+}

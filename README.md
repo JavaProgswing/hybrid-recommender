@@ -10,6 +10,11 @@
 
 <div align="center">
 
+[![Contributors](https://img.shields.io/github/contributors/leonagoel/hybrid-recommender.svg?style=flat-square)](https://github.com/leonagoel/hybrid-recommender/graphs/contributors)
+[![PRs Welcome](https://img.shields.io/badge/PRs_welcome-brightgreen.svg?style=flat-square)](https://makeapullrequest.com)
+[![GSSoC 2026](https://img.shields.io/badge/GSSoC_2026-orange.svg?style=flat-square)](https://gssoc.girlscript.tech/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-3FCF8E?style=flat-square&logo=supabase&logoColor=white)](https://supabase.com)
@@ -164,7 +169,7 @@ hybrid-recommender/
 
 ```bash
 # 1 — Clone & install
-git clone https://github.com/Bhumi1701/hybrid-recommender.git
+git clone https://github.com/leonagoel/hybrid-recommender.git 
 cd hybrid-recommender
 pip install -r requirements.txt
 ```
@@ -191,6 +196,40 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 
 Open **http://localhost:8000**, upload any CSV/JSON from `datasets/`, click **Build Models**, then start typing to search.
 
+### Async Recommendations — Celery Worker Setup
+
+Async recommendation tasks require Redis and a running Celery worker.
+
+**1 — Start Redis** (Docker recommended):
+```bash
+docker run -d -p 6379:6379 redis:7-alpine
+```
+
+**2 — Add to `.env`**:
+```env
+REDIS_URL=redis://localhost:6379/0
+```
+
+**3 — Start the Celery worker** (separate terminal, from project root):
+```bash
+celery -A celery_app worker --loglevel=info
+```
+
+**4 — Use async recommendations**:
+```bash
+# Dispatch — returns task_id instantly (202 Accepted)
+curl -X POST "http://localhost:8000/api/recommend?item_title=YourItem&top_n=10"
+
+# Poll for results using the returned task_id
+curl "http://localhost:8000/api/task/<task_id>"
+```
+
+**Response flow:**
+```
+POST /api/recommend  →  { "task_id": "abc123", "status": "PENDING" }
+GET  /api/task/abc123  →  { "status": "SUCCESS", "result": { ... } }
+```
+
 ### Alternative — Streamlit UI *(no Supabase required)*
 
 ```bash
@@ -208,15 +247,65 @@ GET    /api/status                   →  System status + product count
 GET    /api/search?q=...&limit=20    →  Full-text search (PostgreSQL FTS)
 POST   /api/upload                   →  Upload CSV/JSON dataset
 POST   /api/build                    →  Train TF-IDF, SVD, VADER models
-GET    /api/recommend/{title}        →  Hybrid recommendations for an item
+POST   /api/recommend                →  Dispatch async recommendation task → returns task_id (202)
+GET    /api/task/{task_id}           →  Poll task status (PENDING/STARTED/SUCCESS/FAILURE)
+GET    /api/recommend/{title}        →  Sync recommendations (legacy, backward-compatible)
 GET    /api/items?page=1&per_page=50 →  Paginated product listing
 GET    /api/categories               →  All available categories
 GET    /api/weights                  →  Current α, β, γ blend weights
 PUT    /api/weights                  →  Update blend weights live
 GET    /api/purchases/{user_id}      →  User purchase history
 POST   /api/purchases                →  Record a purchase event
-```
 
+06.1 — API Examples (curl)
+All examples assume the server is running at http://localhost:8000
+
+System Status
+curl http://localhost:8000/api/status
+
+Search Products
+curl "http://localhost:8000/api/search?q=laptop&limit=10"
+
+Paginated Items
+curl "http://localhost:8000/api/items?page=1&per_page=20"
+
+All Categories
+curl http://localhost:8000/api/categories
+
+Get Current Weights
+curl http://localhost:8000/api/weights
+
+Update Hybrid Weights
+curl -X PUT "http://localhost:8000/api/weights" \
+  -H "Content-Type: application/json" \
+  -d '{"alpha": 0.5, "beta": 0.3, "gamma": 0.2}'
+
+Get User Purchases
+curl "http://localhost:8000/api/purchases/user_123"
+
+Record a Purchase
+curl -X POST "http://localhost:8000/api/purchases" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "user_123", "item_id": "prod_456"}'
+
+Async Recommendation (Dispatch)
+curl -X POST "http://localhost:8000/api/recommend?item_title=Wireless%20Mouse&top_n=10"
+
+Poll Task Result (replace task_id with actual ID)
+curl "http://localhost:8000/api/task/abc123"
+
+Sync Recommendation (Legacy)
+curl "http://localhost:8000/api/recommend/Laptop"
+
+Upload Dataset
+curl -X POST "http://localhost:8000/api/upload" \
+  -F "file=@/path/to/your/dataset.csv"
+
+Build/Train Models
+curl -X POST http://localhost:8000/api/build
+
+Get Config
+curl http://localhost:8000/api/config
 ---
 
 ## 07 — Evaluation
@@ -248,6 +337,164 @@ NDCG@K       —  ranking quality (discounted cumulative gain)
 ```
 
 ---
+
+---
+
+## 09 — Troubleshooting
+
+### ModuleNotFoundError
+
+If you see:
+
+```bash
+ModuleNotFoundError: No module named 'xyz'
+```
+
+Run:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+### Port Already In Use
+
+If port 8000 is busy:
+
+```bash
+python -m uvicorn backend.main:app --port 8001
+```
+
+---
+
+### NLTK VADER Download Error
+
+Run Python shell:
+
+```python
+import nltk
+nltk.download('vader_lexicon')
+```
+
+---
+
+### Streamlit Not Found
+
+Install Streamlit manually:
+
+```bash
+pip install streamlit
+```
+
+---
+
+### Supabase Connection Error
+
+Check your `.env` file:
+
+```env
+SUPABASE_URL=your_url
+SUPABASE_ANON_KEY=your_key
+SUPABASE_SERVICE_KEY=your_service_key
+```
+
+Make sure:
+- No extra spaces
+- No quotes
+- Correct project credentials
+
+---
+
+## 10 — Setup Verification
+
+### Backend Verification
+
+Run:
+
+```bash
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+Open:
+
+```text
+http://localhost:8000/api/status
+```
+
+Expected response:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+---
+
+### Streamlit Verification
+
+Run:
+
+```bash
+streamlit run app.py
+```
+
+Expected:
+- Browser opens automatically
+- CSV upload interface visible
+- Recommendation UI loads successfully
+
+---
+
+### Dataset Upload Verification
+
+Upload any sample CSV and verify:
+- Dataset loads without errors
+- Models build successfully
+- Recommendations appear
+
+---
+
+## 11 — Beginner Contributor Tips
+
+### Sync Your Fork Before Starting
+
+```bash
+git remote add upstream https://github.com/leonagoel/hybrid-recommender.git
+git fetch upstream
+git merge upstream/main
+```
+
+---
+
+### Resolve Merge Conflicts
+
+If conflicts happen:
+
+1. Open conflicted files
+2. Remove conflict markers:
+   ```text
+   <<<<<<<
+   =======
+   >>>>>>>
+   ```
+3. Keep correct code
+4. Save file
+5. Commit again
+
+---
+
+### Pull Request Checklist
+
+Before submitting PR:
+
+- [ ] Project runs successfully
+- [ ] README formatting checked
+- [ ] No unnecessary files added
+- [ ] Branch name follows guidelines
+- [ ] Commit message follows convention
+- [ ] PR linked to issue
 
 ## License
 
