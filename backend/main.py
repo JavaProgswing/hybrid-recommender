@@ -1,3 +1,4 @@
+
 """
 FastAPI Backend for the Hybrid Recommender System — v3 (Supabase).
 Integrates PostgreSQL full-text search, Supabase auth, and the improved hybrid model.
@@ -7,10 +8,9 @@ import sys
 import io
 import time
 import logging
-import re
+import math
 from collections import deque, Counter
 from threading import Lock
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from fastapi import (
@@ -26,12 +26,12 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi import Depends
+from fastapi.responses import FileResponse
+from collections import Counter
 from pydantic import BaseModel
 from typing import Any, Optional
 from dotenv import load_dotenv
+from datetime import datetime
 
 load_dotenv()
 
@@ -53,7 +53,32 @@ from tasks import compute_recommendations
 from ab_testing import DEFAULT_EXPERIMENT_ID, run_recommendation_experiment
 
 from functools import lru_cache
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+# Add src/evaluation to path for importing evaluation module
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'evaluation'))
+from evaluation import run_evaluation
+
+from pydantic import BaseModel as PydanticBase
+from typing import Optional
+
+class WeightsInput(PydanticBase):
+    alpha: float = 0.4
+    beta:  float = 0.4
+    gamma: float = 0.2
+
+class ModeMetrics(PydanticBase):
+    precision: float
+    recall:    float
+    ndcg:      float
+
+class EvaluationResponse(PydanticBase):
+    k:         int
+    mode:      str
+    timestamp: str
+    weights:   WeightsInput
+    results:   dict[str, ModeMetrics]
+    run_id:    Optional[str] = None
 
 # ── App ──────────────────────────────────────────────────────────────
 app = FastAPI(title="Hybrid Recommender API", version="3.0")
@@ -168,6 +193,103 @@ def _clear_response_cache() -> None:
 def _set_cache_headers(response: Response, status: str) -> None:
     response.headers["Cache-Control"] = CACHE_CONTROL_VALUE
     response.headers["X-Cache"] = status
+
+
+@app.get("/api/evaluate", response_model=EvaluationResponse, tags=["evaluation"])
+async def evaluate_models(
+    k:     int   = 10,
+    mode:  str   = "all",
+    alpha: float = 0.4,
+    beta:  float = 0.4,
+    gamma: float = 0.2,
+):
+    """
+    Run Precision@K, Recall@K, NDCG@K evaluation for one or all model modes.
+
+    Query params:
+      - k     : number of recommendations to evaluate (default 10)
+      - mode  : "content" | "collaborative" | "sentiment" | "hybrid" | "all"
+      - alpha : content weight   (used only for hybrid)
+      - beta  : collab weight    (used only for hybrid)
+      - gamma : sentiment weight (used only for hybrid)
+
+    Returns metrics per mode and persists the run to Supabase.
+    """
+    # Guard: models must be built before evaluation makes sense
+    if not models["ready"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Models have not been built yet. Upload a dataset and click 'Build Models' first."
+        )
+
+    valid_modes = {"content", "collaborative", "sentiment", "hybrid", "all"}
+    if mode not in valid_modes:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid mode '{mode}'. Choose from: {sorted(valid_modes)}"
+        )
+
+    if not (1 <= k <= 100):
+        raise HTTPException(status_code=422, detail="k must be between 1 and 100.")
+
+    weights = {"alpha": alpha, "beta": beta, "gamma": gamma}
+
+    try:
+        raw_results = run_evaluation(k=k, mode=mode, weights=weights)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    run_id    = None
+
+    # Persist to Supabase benchmark_runs table
+    try:
+        insert_payload = {
+            "k":         k,
+            "mode":      mode,
+            "weights":   weights,
+            "results":   raw_results,
+            "created_at": timestamp,
+        }
+        sb = get_supabase()
+        db_response = sb.table("benchmark_runs").insert(insert_payload).execute()
+        if db_response.data:
+            run_id = str(db_response.data[0].get("id", ""))
+    except Exception as db_err:
+        # Non-fatal — evaluation result still returned even if DB insert fails
+        print(f"[evaluate] Supabase insert failed (non-fatal): {db_err}")
+
+    return EvaluationResponse(
+        k=k,
+        mode=mode,
+        timestamp=timestamp,
+        weights=WeightsInput(alpha=alpha, beta=beta, gamma=gamma),
+        results={name: ModeMetrics(**metrics) for name, metrics in raw_results.items()},
+        run_id=run_id,
+    )
+
+
+@app.get("/api/evaluate/history", tags=["evaluation"])
+async def get_evaluation_history(limit: int = 5):
+    """
+    Return the last N benchmark runs from Supabase (default: 5).
+    Used to populate the history table in the frontend dashboard.
+    """
+    try:
+        sb = get_supabase()
+        db_response = (
+            sb.table("benchmark_runs")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return {"runs": db_response.data or []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch history: {str(e)}")
+
 
 # CORS — restrict in production; allow localhost for development
 allowed_origins = os.environ.get("CORS_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
@@ -505,6 +627,13 @@ def dashboard(
         "model_last_trained": models.get("last_trained_at"),
     }
 
+@app.get("/api/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "model_loaded": models["ready"]
+    }
 
 # ── Search (PostgreSQL FTS) ─────────────────────────────────────────
 @app.get("/api/search")
