@@ -248,6 +248,15 @@ NDCG@K       —  ranking quality (discounted cumulative gain)
 ✓  Generic error messages — no stack trace leakage
 ✓  SQL injection safe (Supabase SDK parameterized queries)
 ```
+## 👥 Contributors
+
+Thanks to all our amazing contributors! ✨
+
+[![Contributors](https://contrib.rocks/image?repo=leonagoel/hybrid-recommender)](https://github.com/leonagoel/hybrid-recommender/graphs/contributors)
+
+<a href="https://github.com/leonagoel/hybrid-recommender/graphs/contributors">
+  View all contributors →
+</a>
 
 ## License
 
