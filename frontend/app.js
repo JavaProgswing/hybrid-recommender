@@ -1767,9 +1767,28 @@ async function handleWeightChange() {
     const b = parseInt(els.weightBeta.value);
     const g = parseInt(els.weightGamma.value);
 
+    // Save values to sessionStorage
+    sessionStorage.setItem('alpha', a);
+    sessionStorage.setItem('beta', b);
+    sessionStorage.setItem('gamma', g);
+
     try {
-        await API.put('/api/weights', { alpha: a / 100, beta: b / 100, gamma: g / 100 });
+        await API.put('/api/weights', {
+            alpha: a / 100,
+            beta: b / 100,
+            gamma: g / 100
+        });
     } catch {}
+}
+
+function loadSavedWeights() {
+    const alpha = sessionStorage.getItem('alpha') || 33;
+    const beta = sessionStorage.getItem('beta') || 33;
+    const gamma = sessionStorage.getItem('gamma') || 33;
+
+    els.weightAlpha.value = alpha;
+    els.weightBeta.value = beta;
+    els.weightGamma.value = gamma;
 }
 
 // ── Event Listeners ─────────────────────────────────────────────────
@@ -1855,6 +1874,8 @@ document.head.appendChild(spinStyle);
 // ── Init ────────────────────────────────────────────────────────────
 async function init() {
     bindEvents();
+    initDebugMode();
+    loadSavedWeights();
     initTypeToSearch();
 
     // Initialize Supabase client from backend config (no hardcoded keys)

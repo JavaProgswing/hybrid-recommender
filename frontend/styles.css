@@ -1621,6 +1621,9 @@ main {
         transform: scale(0.8);
     }
 
+.wishlist-btn:hover::before {
+    transform: translateX(100%);
+}
     40% {
         opacity: 1;
         transform: scale(1);
