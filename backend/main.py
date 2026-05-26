@@ -506,6 +506,11 @@ class FederatedTrainRequest(BaseModel):
     reg: float = 0.05
 
 
+class OptimizeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    n_trials: int = Field(20, ge=1, le=100)
+
+
 # ── Health ────────────────────────────────────────────────────────────
 @app.get("/health")
 @app.get("/api/health")
@@ -907,6 +912,22 @@ def build_models(_csrf: None = Depends(csrf_header_dep)):
     except Exception as e:
         logger.warning("Collaborative model data load failed: %s", e)
     hybrid_model = HybridRecommender(content_model, collab_model, item_df)
+    
+    # Try to load optimal weights if available
+    try:
+        import json
+        from pathlib import Path
+        optimal_weights_path = Path("models/optimal_weights.json")
+        if optimal_weights_path.exists():
+            with open(optimal_weights_path, "r") as f:
+                opt_data = json.load(f)
+                weights = opt_data.get("weights", {})
+                if all(k in weights for k in ["alpha", "beta", "gamma"]):
+                    hybrid_model.set_weights(weights["alpha"], weights["beta"], weights["gamma"])
+                    logger.info("Loaded optimal weights from models/optimal_weights.json")
+    except Exception as e:
+        logger.warning("Failed to load optimal weights: %s", e)
+
     build_time = round(time.time() - start_time, 2)
     models["content"] = content_model
     models["collab"] = collab_model
@@ -989,6 +1010,22 @@ def train_federated(req: FederatedTrainRequest):
         raise HTTPException(500, f"Federated training execution failed: {str(e)}")
 
     hybrid_model = HybridRecommender(content_model, collab_model, item_df)
+    
+    # Try to load optimal weights if available
+    try:
+        import json
+        from pathlib import Path
+        optimal_weights_path = Path("models/optimal_weights.json")
+        if optimal_weights_path.exists():
+            with open(optimal_weights_path, "r") as f:
+                opt_data = json.load(f)
+                weights = opt_data.get("weights", {})
+                if all(k in weights for k in ["alpha", "beta", "gamma"]):
+                    hybrid_model.set_weights(weights["alpha"], weights["beta"], weights["gamma"])
+                    logger.info("Loaded optimal weights from models/optimal_weights.json")
+    except Exception as e:
+        logger.warning("Failed to load optimal weights: %s", e)
+
     build_time = round(time.time() - start_time, 2)
 
     models["content"] = content_model
@@ -1005,6 +1042,26 @@ def train_federated(req: FederatedTrainRequest):
         "items": len(item_df),
         "users": int(interaction_df['user_id'].nunique()),
         "build_time_seconds": build_time,
+    }
+
+
+@app.post("/api/optimize")
+def optimize_model_hyperparameters(
+    request: Request,
+    payload: OptimizeRequest,
+    _csrf: None = Depends(csrf_header_dep),
+):
+    _require_admin_access(request)
+    
+    n_trials = payload.n_trials
+    
+    from tasks import optimize_hyperparameters_task
+    
+    task = optimize_hyperparameters_task.delay(n_trials=n_trials)
+    
+    return {
+        "message": f"Optimization task started with {n_trials} trials.",
+        "task_id": task.id
     }
 
 
